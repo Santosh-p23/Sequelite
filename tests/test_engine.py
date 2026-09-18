@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -88,6 +89,36 @@ class EngineTests(unittest.TestCase):
             self.assertEqual(Database(path).execute('SELECT * FROM t')[0].rows, [[1], [2]])
             db.execute('BEGIN; DROP TABLE t; ROLLBACK')
             self.assertIn('t', Database(path).tables)
+
+    def test_relative_database_path_survives_directory_changes(self):
+        original_directory = Path.cwd()
+        with tempfile.TemporaryDirectory() as tmp:
+            first = Path(tmp) / 'first'
+            second = Path(tmp) / 'second'
+            first.mkdir()
+            second.mkdir()
+            other_path = second / 'data.db'
+            other = Database(other_path)
+            other.execute('CREATE TABLE t (id INTEGER); INSERT INTO t VALUES (99);')
+            other_contents = other_path.read_bytes()
+            try:
+                os.chdir(first)
+                db = Database('data.db')
+                db.execute('CREATE TABLE t (id INTEGER); INSERT INTO t VALUES (1);')
+                os.chdir(second)
+                db.execute('INSERT INTO t VALUES (2);')
+                self.assertEqual(
+                    Database(first / 'data.db').execute('SELECT * FROM t')[0].rows,
+                    [[1], [2]],
+                )
+                db.execute('BEGIN; INSERT INTO t VALUES (3); COMMIT;')
+                self.assertEqual(
+                    Database(first / 'data.db').execute('SELECT * FROM t')[0].rows,
+                    [[1], [2], [3]],
+                )
+                self.assertEqual(other_path.read_bytes(), other_contents)
+            finally:
+                os.chdir(original_directory)
 
     def test_storage_failure_restores_memory(self):
         self.seed()

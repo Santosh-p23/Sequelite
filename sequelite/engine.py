@@ -245,7 +245,8 @@ def matches(expr, row):
 class Database:
     """Single-owner database. Each statement is atomic; batches are sequential."""
     def __init__(self, path=':memory:'):
-        self.path = None if str(path) == ':memory:' else Path(path)
+        # Keep saves tied to the opened file if the caller changes directories.
+        self.path = None if str(path) == ':memory:' else Path(path).resolve()
         self.tables = {}
         self._snapshot = None
         if self.path and self.path.exists():
