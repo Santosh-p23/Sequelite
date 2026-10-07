@@ -42,7 +42,8 @@ def complete(sql):
             end = sql.find('\n', i)
             if end < 0:
                 break
-            i = end
+            i = end + 1
+            continue
         if not char.isspace():
             last = char
         i += 1
