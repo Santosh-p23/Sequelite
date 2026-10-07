@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import math
 import os
@@ -9,6 +10,8 @@ from pathlib import Path
 import re
 import tempfile
 from dataclasses import dataclass, field
+
+from .locking import writer_lock
 
 
 class DatabaseError(Exception):
@@ -245,15 +248,17 @@ def matches(expr, row):
 
 
 class Database:
-    """Single-owner database. Each statement is atomic; batches are sequential."""
+    """Snapshot-based database. Each statement is atomic; batches are sequential."""
     def __init__(self, path=':memory:'):
         # Keep saves tied to the opened file if the caller changes directories.
         self.path = None if str(path) == ':memory:' else Path(path).resolve()
         self.tables = {}
         self._snapshot = None
+        self._disk_version = None
         if self.path and self.path.exists():
             try:
-                data = json.loads(self.path.read_text())
+                contents = self.path.read_bytes()
+                data = json.loads(contents)
                 if not isinstance(data, dict):
                     raise ValueError('Database must be an object')
                 if data['format'] != 'sequelite-1' or not isinstance(data['tables'], dict):
@@ -261,6 +266,7 @@ class Database:
                 self.tables = data['tables']
                 for table in self.tables.values():
                     self._validate(table)
+                self._disk_version = hashlib.sha256(contents).digest()
             except (OSError, ValueError, KeyError, TypeError, DatabaseError) as exc:
                 raise DatabaseError(f'Cannot open database: {exc}') from exc
 
@@ -271,14 +277,33 @@ class Database:
     def _save(self):
         if self.path is None:
             return
+        try:
+            with writer_lock(self.path):
+                try:
+                    version = hashlib.sha256(self.path.read_bytes()).digest()
+                except FileNotFoundError:
+                    version = None
+                if version != self._disk_version:
+                    raise DatabaseError('Database changed since it was opened; reopen it before writing')
+                self._write()
+        except BlockingIOError as exc:
+            raise DatabaseError(str(exc)) from exc
+        except OSError as exc:
+            raise DatabaseError(f'Cannot save database: {exc}') from exc
+
+    def _write(self):
+        """Replace the database while holding the writer lock."""
         temporary = None
         try:
-            with tempfile.NamedTemporaryFile(mode='w', dir=self.path.parent, delete=False, encoding='utf-8') as file:
+            contents = json.dumps({'format': 'sequelite-1', 'tables': self.tables}, allow_nan=False).encode('utf-8')
+            version = hashlib.sha256(contents).digest()
+            with tempfile.NamedTemporaryFile(mode='wb', dir=self.path.parent, delete=False) as file:
                 temporary = file.name
-                json.dump({'format': 'sequelite-1', 'tables': self.tables}, file, allow_nan=False)
+                file.write(contents)
                 file.flush()
                 os.fsync(file.fileno())
             os.replace(temporary, self.path)
+            self._disk_version = version
         except (OSError, ValueError) as exc:
             raise DatabaseError(f'Cannot save database: {exc}') from exc
         finally:
