@@ -1,3 +1,4 @@
+import io
 import json
 import os
 import subprocess
@@ -8,7 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from sequelite import Database, DatabaseError
-from sequelite.cli import complete
+from sequelite.cli import complete, main
 
 
 class EngineTests(unittest.TestCase):
@@ -146,6 +147,41 @@ class EngineTests(unittest.TestCase):
         self.assertFalse(complete("SELECT 'unfinished;"))
         self.assertTrue(complete("SELECT 'it''s; fine'; -- comment"))
         self.assertFalse(complete('-- comment;'))
+
+    def test_shell_completion_with_trailing_comments(self):
+        for sql in (
+            'SELECT * FROM items; -- comment\n',
+            "SELECT * FROM items; -- quote ' and semicolon ;\n\n",
+            'SELECT * FROM items; -- first\n-- second\n',
+            "SELECT * FROM items WHERE name = 'it''s -- tea'; -- comment\n",
+        ):
+            with self.subTest(sql=sql):
+                self.assertTrue(complete(sql))
+        for sql in (
+            '-- comment;\n',
+            'SELECT * FROM items -- comment;\n',
+            'SELECT * FROM items; -- comment\nSELECT',
+        ):
+            with self.subTest(sql=sql):
+                self.assertFalse(complete(sql))
+
+    def test_interactive_shell_executes_statements_with_trailing_comments(self):
+        commands = [
+            'CREATE TABLE t (id INTEGER); -- create',
+            'INSERT INTO t VALUES (7); -- insert',
+            'SELECT * FROM t; -- select',
+            '.quit',
+            EOFError(),
+        ]
+        output, errors = io.StringIO(), io.StringIO()
+        with patch('sys.stdin.isatty', return_value=True), \
+                patch('builtins.input', side_effect=commands), \
+                patch('sys.stdout', output), patch('sys.stderr', errors):
+            self.assertEqual(main(['--json']), 0)
+        results = [json.loads(line) for line in output.getvalue().splitlines()[1:]]
+        self.assertEqual(len(results), 3)
+        self.assertEqual(results[-1]['rows'], [[7]])
+        self.assertEqual(errors.getvalue(), '')
 
     def test_cli_demo_and_error_status(self):
         process = subprocess.run([sys.executable, '-m', 'sequelite', '--json', '-f', 'examples/demo.sql'], capture_output=True, text=True)
