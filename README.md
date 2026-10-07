@@ -173,6 +173,7 @@ Tests cover CRUD, query precedence, NULL, escaping, constraints and atomic failu
 
 ## Limitations
 
+- Each `WHERE` condition supports up to 256 comparisons or NULL checks and 64 nested levels of parentheses. Larger conditions raise `DatabaseError` before the statement executes. The interactive shell remains usable, and any active transaction remains available for correction or rollback.
 - Database files are Sequelite JSON files, not compatible with SQLite's binary file format.
 - One owner per file: no concurrency control, file locking, or simultaneous writers.
 - Tables live in memory. Queries scan rows; commits rewrite the file. There are no B-trees, indexes, pages, query optimizer, WAL, or crash-recovery journal.

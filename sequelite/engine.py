@@ -25,6 +25,10 @@ class Result:
 
 TOKEN = re.compile(r"\s+|--[^\n]*|'(?:[^']|'')*'|(?:\d+\.\d*|\.\d+|\d+)(?:[eE][+-]?\d+)?|[A-Za-z_][A-Za-z_0-9]*|<=|>=|<>|!=|[(),;*=<>+-]")
 
+# Bound both recursive parsing and traversal of the resulting predicate tree.
+MAX_CONDITION_TERMS = 256
+MAX_CONDITION_NESTING = 64
+
 
 def tokenize(sql):
     tokens, pos = [], 0
@@ -89,12 +93,19 @@ class Parser:
         except ValueError:
             raise DatabaseError(f'Expected a string, finite number, or NULL; got {token}') from None
 
-    def expression(self):
+    def expression(self, depth=0):
+        if depth == 0:
+            self.condition_terms = 0
+        if depth > MAX_CONDITION_NESTING:
+            raise DatabaseError(f'SQL condition limit exceeded: at most {MAX_CONDITION_NESTING} levels of parentheses')
         def atom():
             if self.accept('('):
-                expr = self.expression()
+                expr = self.expression(depth + 1)
                 self.expect(')')
                 return expr
+            self.condition_terms += 1
+            if self.condition_terms > MAX_CONDITION_TERMS:
+                raise DatabaseError(f'SQL condition limit exceeded: at most {MAX_CONDITION_TERMS} comparisons or NULL checks')
             column = self.name()
             if self.accept('IS'):
                 negate = self.accept('NOT')
