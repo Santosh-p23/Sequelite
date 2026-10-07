@@ -153,13 +153,25 @@ print(result.rows)     # [[1, 'Database Design']]
 
 `execute` returns one `Result` per statement and raises `DatabaseError` for invalid SQL, constraint violations, or storage errors. A failed statement restores its prior state. Earlier successful statements in a batch remain applied; use an explicit transaction when you need to roll back a batch. If a statement fails inside an active transaction, the transaction remains active for correction or explicit rollback.
 
+## Concurrent access
+
+Each file-backed connection loads a snapshot of the database. Multiple connections can read, but every save acquires an exclusive operating-system lock and checks that the file still matches the snapshot this connection loaded or last saved.
+
+- **Database is busy:** another writer currently holds the save lock. Retry after that writer finishes; if it changed the file, the retry will report a stale snapshot instead.
+- **Database changed since it was opened:** another connection changed the file. Create a new `Database(path)` to load the latest state before reapplying your changes. In the interactive shell, exit and reopen the database.
+- A rejected statement restores its previous in-memory state. A rejected `COMMIT` leaves the transaction active; use `ROLLBACK` to discard it before reopening and retrying.
+
+A sidecar named `<database-file>.sequelite-lock` is created beside the database. The lock is held only during saves and released when the file handle closes, including on process exit. The sidecar remains on disk and must not be deleted while connections are in use. Its presence alone does not mean the database is locked. The database directory must be writable to save changes.
+
+Locking uses `flock` on macOS/Linux and byte-range locking on Windows, with no third-party dependencies. Protection applies to cooperating Sequelite processes using the same resolved path on a filesystem that supports these locks. External file editors do not participate in the lock protocol. Connections retain their own snapshots and do not automatically refresh after another writer commits.
+
 ## Architecture
 
 1. The tokenizer recognizes identifiers, literals, punctuation, operators, and line comments.
 2. A recursive-descent parser produces statements and predicate trees, with AND binding more tightly than OR.
 3. The executor evaluates predicates over rows, applies projections and ordering, and validates mutations.
 4. Each mutation operates with a rollback snapshot. Explicit transactions retain a snapshot until commit or rollback.
-5. File-backed commits serialize to a temporary file, flush it, and replace the database file. Opening the file reconstructs the tables.
+5. File-backed commits acquire a save lock, reject stale snapshots, serialize to a temporary file, flush it, and replace the database file. Opening the file reconstructs the tables.
 
 Source: `sequelite/engine.py` (engine), `sequelite/cli.py` (shell), `tests/test_engine.py` (tests), `examples/demo.sql` (demonstration).
 
@@ -169,12 +181,12 @@ Source: `sequelite/engine.py` (engine), `sequelite/cli.py` (shell), `tests/test_
 python3 -m unittest discover -s tests -v
 ```
 
-Tests cover CRUD, query precedence, NULL, escaping, constraints and atomic failures, invalid SQL, transaction/schema rollback, reopening persisted files, failed saves, corrupt files, and CLI execution. GitHub Actions builds and tests Python 3.10, 3.12, and 3.14.
+Tests cover CRUD, query precedence, NULL, escaping, constraints and atomic failures, invalid SQL, transaction/schema rollback, reopening persisted files, failed saves, corrupt files, and CLI execution. Concurrency tests cover stale snapshots, simultaneous processes, transaction conflicts, and lock release after errors or process exit. GitHub Actions is configured to build and test Python 3.10, 3.12, and 3.14 on Linux and Windows.
 
 ## Limitations
 
 - Database files are Sequelite JSON files, not compatible with SQLite's binary file format.
-- One owner per file: no concurrency control, file locking, or simultaneous writers.
+- Writes are serialized with file locking and stale-snapshot detection. There is no automatic transaction retry, snapshot refresh, or support for sharing a single `Database` object between threads.
 - Tables live in memory. Queries scan rows; commits rewrite the file. There are no B-trees, indexes, pages, query optimizer, WAL, or crash-recovery journal.
 - Atomic file replacement reduces partial writes but is not a claim of SQLite-level crash durability.
 - No joins, foreign keys, ALTER TABLE, subqueries, expressions in assignments, parameters, or aggregates other than COUNT(*).
