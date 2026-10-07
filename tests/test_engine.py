@@ -51,6 +51,36 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(self.rows('SELECT id FROM items ORDER BY price'), [[3], [1], [2]])
         self.assertEqual(self.rows('SELECT COUNT(*) FROM items LIMIT 0'), [])
 
+    def test_select_column_named_count(self):
+        self.db.execute('CREATE TABLE counters (id INTEGER, count INTEGER); '
+                        'INSERT INTO counters VALUES (1, 7), (2, 3), (3, NULL);')
+        for spelling in ('count', 'COUNT', 'CoUnT'):
+            with self.subTest(spelling=spelling):
+                result = self.db.execute(f'SELECT {spelling} FROM counters ORDER BY id')[0]
+                self.assertEqual(result.columns, ['count'])
+                self.assertEqual(result.rows, [[7], [3], [None]])
+        self.assertEqual(
+            self.rows('SELECT count, id FROM counters WHERE count >= 3 ORDER BY count LIMIT 1'),
+            [[3, 2]],
+        )
+        self.assertEqual(self.rows('SELECT id, count FROM counters WHERE count IS NULL'), [[3, None]])
+        self.assertEqual(self.rows('SELECT count FROM counters WHERE id = 99'), [])
+        with self.assertRaisesRegex(DatabaseError, 'No such column: count'):
+            self.db.execute('SELECT count FROM items')
+
+    def test_count_aggregate_with_count_column(self):
+        self.db.execute('CREATE TABLE counters (count INTEGER); '
+                        'INSERT INTO counters VALUES (7), (3), (NULL);')
+        for function in ('COUNT(*)', 'count (*)', 'CoUnT -- comment\n (*)'):
+            with self.subTest(function=function):
+                result = self.db.execute(f'SELECT {function} FROM counters')[0]
+                self.assertEqual(result.columns, ['count(*)'])
+                self.assertEqual(result.rows, [[3]])
+        self.assertEqual(self.rows('SELECT COUNT(*) FROM counters WHERE count >= 3'), [[2]])
+        for function in ('COUNT()', 'COUNT(count)', 'COUNT('):
+            with self.subTest(function=function), self.assertRaises(DatabaseError):
+                self.db.execute(f'SELECT {function} FROM counters')
+
     def test_escaping_comments_and_multiple_statements(self):
         self.db.execute("-- comment\nINSERT INTO items (id, name) VALUES (1, 'It''s; tea'); SELECT * FROM items;")
         self.assertEqual(self.rows()[0], [1, "It's; tea", None, None])

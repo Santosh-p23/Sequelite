@@ -44,8 +44,9 @@ class Parser:
         self.tokens = tokens
         self.i = 0
 
-    def peek(self):
-        return self.tokens[self.i].upper() if self.i < len(self.tokens) else ''
+    def peek(self, offset=0):
+        index = self.i + offset
+        return self.tokens[index].upper() if index < len(self.tokens) else ''
 
     def take(self):
         if self.i >= len(self.tokens):
@@ -168,8 +169,9 @@ class Parser:
                     break
             return (op, name, columns, rows)
         if op == 'SELECT':
-            count = self.accept('COUNT')
+            count = self.peek() == 'COUNT' and self.peek(1) == '('
             if count:
+                self.expect('COUNT')
                 self.expect('(')
                 self.expect('*')
                 self.expect(')')
