@@ -7,3 +7,5 @@ dist/
 *.db
 *.sequelite-lock
 .DS_Store
+.coverage
+coverage.*
