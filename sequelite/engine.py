@@ -183,7 +183,7 @@ class Parser:
                     break
             return (op, name, columns, rows)
         if op == 'SELECT':
-            count = self.peek() == 'COUNT' and self.peek(1) == '('
+            count = self.peek() == 'COUNT'
             if count:
                 self.expect('COUNT')
                 self.expect('(')
